@@ -19,7 +19,7 @@ class MyHomePageState extends State<MyHomePage> {
   String readValue = "N/A";
   bool isReading = false;
 
-  // UUIDs correspondant aux caractéristiques de l'ESP32
+  // UUIDs corresponding to ESP32 characteristics
   final Guid serviceUuid = Guid("4fafc201-1fb5-459e-8fcc-c5c9c331914b");
   final Guid charWriteUuid = Guid("beb5483e-36e1-4688-b7f5-ea07361b26a8");
   final Guid charNotifyUuid = Guid("6d68efe5-04b6-4a85-abc4-c2670b7bf7fd");
@@ -33,8 +33,8 @@ class MyHomePageState extends State<MyHomePage> {
           if (characteristic.characteristicUuid == charWriteUuid &&
               characteristic.properties.write) {
             await characteristic
-                .write([48], withoutResponse: false); // "0" en ASCII
-            print("Commande '0' envoyée à ESP32");
+                .write([48], withoutResponse: false); // "0" in ASCII
+            print("Command '0' sent to ESP32");
           }
         }
       }
@@ -56,7 +56,7 @@ class MyHomePageState extends State<MyHomePage> {
             setState(() {
               readValue = String.fromCharCodes(value);
             });
-            print("Valeur lue de ESP32: $readValue");
+            print("Value read from ESP32: $readValue");
           }
         }
       }
@@ -74,13 +74,12 @@ class MyHomePageState extends State<MyHomePage> {
           if (characteristic.characteristicUuid == charNotifyUuid &&
               characteristic.properties.notify) {
             await characteristic.setNotifyValue(true);
+            print("Notification enabled for ESP32");
             characteristic.onValueReceived.listen((List<int> data) {
-              if (data.isNotEmpty) {
-                setState(() {
-                  receivedData = data[0]; // Lire et mettre à jour l'UI
-                });
-                print("Notification reçue de ESP32: $receivedData");
-              }
+              setState(() {
+                receivedData = data[0]; // Read and update UI
+              });
+              print("Notification received from ESP32: $receivedData");
             });
           }
         }
@@ -93,7 +92,7 @@ class MyHomePageState extends State<MyHomePage> {
         Provider.of<BluetoothDeviceProvider>(context, listen: false);
     final device = provider.connectedDevice;
     if (device == null) {
-      Snackbar.show(ABC.a, "Aucun appareil connecté", success: false);
+      Snackbar.show(ABC.a, "No device connected", success: false);
       return;
     }
 
@@ -118,58 +117,113 @@ class MyHomePageState extends State<MyHomePage> {
       ),
       body: Container(
         width: double.infinity,
-        height: double.infinity, // Prend toute la hauteur
-        decoration: const BoxDecoration(
+        height: double.infinity,
+        decoration: BoxDecoration(
           image: DecorationImage(
-            image: AssetImage('assets/bluetooth_backgroud.jpg'),
+            image: AssetImage('assets/bg_temp.jpg'),
             fit: BoxFit.cover,
           ),
         ),
-        child: SizedBox.expand(
-          // Permet à `Column` de prendre toute la hauteur
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                connectedDevice != null
-                    ? "Connecté à : ${connectedDevice.remoteId}"
-                    : "Aucun appareil connecté",
-                style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: connectedDevice != null ? Colors.green : Colors.red),
+        alignment: Alignment.center,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              connectedDevice != null
+                  ? "✅ Connected to: ${connectedDevice.remoteId}"
+                  : "❌ No device connected",
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: connectedDevice != null
+                    ? Colors.greenAccent
+                    : Colors.redAccent,
               ),
-              const SizedBox(height: 20),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (context) => const ScanScreen())),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+              child: const Text("🔍 Connect a device",
+                  style: TextStyle(color: Colors.white, fontSize: 18)),
+            ),
+            const SizedBox(height: 20),
+            if (connectedDevice != null) ...[
               ElevatedButton(
-                onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (context) => const ScanScreen())),
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
-                child: const Text("Connecter un appareil",
-                    style: TextStyle(color: Colors.white)),
+                onPressed: onReadPressed,
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                child: isReading
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : const Text("📡 Read from ESP",
+                        style: TextStyle(color: Colors.white, fontSize: 18)),
+              ),
+              const SizedBox(height: 30),
+
+              // ✅ Card for received notifications
+              Card(
+                color: Colors.blueGrey[900]?.withOpacity(0.8),
+                elevation: 5,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(15),
+                  child: Column(
+                    children: [
+                      const Text(
+                        "📨 Received Data (Notification):",
+                        style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        "$receivedData",
+                        style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.yellowAccent),
+                      ),
+                    ],
+                  ),
+                ),
               ),
               const SizedBox(height: 20),
-              if (connectedDevice != null) ...[
-                const SizedBox(height: 20),
-                ElevatedButton(
-                  onPressed: onReadPressed,
-                  style:
-                      ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                  child: isReading
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text("Lire depuis ESP",
-                          style: TextStyle(color: Colors.white)),
+
+              // ✅ Card for direct read value
+              Card(
+                color: Colors.blueGrey[800]?.withOpacity(0.8),
+                elevation: 5,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(15),
                 ),
-                const SizedBox(height: 20),
-                Text("Données reçues (Notification) : $receivedData",
-                    style: const TextStyle(fontSize: 16, color: Colors.black)),
-                const SizedBox(height: 10),
-                Text("Valeur lue (Lecture directe) : $readValue",
-                    style: const TextStyle(fontSize: 16, color: Colors.black)),
-              ],
+                child: Padding(
+                  padding: const EdgeInsets.all(15),
+                  child: Column(
+                    children: [
+                      const Text(
+                        "📖 Read Value (Direct Read):",
+                        style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        "$readValue°C",
+                        style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.cyanAccent),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ],
-          ),
+          ],
         ),
       ),
     );

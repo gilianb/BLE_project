@@ -4,15 +4,20 @@
 #include <BLE2902.h>
 
 BLEServer* pServer = NULL;
-BLECharacteristic* pCharacteristic = NULL;
+BLECharacteristic* pCharWrite = NULL;
+BLECharacteristic* pCharNotify = NULL;
+BLECharacteristic* pCharRead = NULL;
+
 bool deviceConnected = false;
 bool oldDeviceConnected = false;
-bool readyToSend = false;  // Variable to determine if the ESP32 should send data
+bool readyToSend = false;
 uint32_t value = 1;
 
-// UUIDs for the service and characteristic
+// UUIDs for the service and characteristics
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#define CHAR_WRITE_UUID     "beb5483e-36e1-4688-b7f5-ea07361b26a8"  // For writing commands
+#define CHAR_NOTIFY_UUID    "6d68efe5-04b6-4a85-abc4-c2670b7bf7fd"  // For sending notifications
+#define CHAR_READ_UUID      "3c0f8a8a-2546-4c7e-87d7-bae8d29465fa"  // For simple reading
 
 // Connection management
 class MyServerCallbacks: public BLEServerCallbacks {
@@ -27,16 +32,14 @@ class MyServerCallbacks: public BLEServerCallbacks {
     }
 };
 
-// Handling data sent by the application
-class MyCallbacks : public BLECharacteristicCallbacks {
+// Handling data received from the application
+class MyWriteCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pCharacteristic) {
         std::string value_from_app = pCharacteristic->getValue();
-        
         if (value_from_app.length() > 0) {
             String receivedData = String(value_from_app.c_str());
             Serial.println("Data received from the application: " + receivedData);
             
-            // If the application sends "0", enable data transmission
             if (receivedData == "0") {
                 readyToSend = true;
             }
@@ -48,64 +51,77 @@ void setup() {
     Serial.begin(115200);
     Serial.println("Starting BLE server...");
 
-    // Initialize the BLE device
+    // Initialize BLE
     BLEDevice::init("ESP32");
 
-    // Create the BLE server
+    // Create BLE server
     pServer = BLEDevice::createServer();
     pServer->setCallbacks(new MyServerCallbacks());
 
-    // Create the BLE service
+    // Create BLE service
     BLEService *pService = pServer->createService(SERVICE_UUID);
 
-    // Create the BLE characteristic with read, write, and notify properties
-    pCharacteristic = pService->createCharacteristic(
-        CHARACTERISTIC_UUID,
-        BLECharacteristic::PROPERTY_READ |
-        BLECharacteristic::PROPERTY_WRITE |
-        BLECharacteristic::PROPERTY_NOTIFY |
-        BLECharacteristic::PROPERTY_INDICATE
+    // ✅ Characteristic for writing (receiving commands)
+    pCharWrite = pService->createCharacteristic(
+        CHAR_WRITE_UUID,
+        BLECharacteristic::PROPERTY_WRITE
     );
+    pCharWrite->setCallbacks(new MyWriteCallbacks());
 
-    pCharacteristic->setCallbacks(new MyCallbacks());
+    // ✅ Characteristic for sending notifications
+    pCharNotify = pService->createCharacteristic(
+        CHAR_NOTIFY_UUID,
+        BLECharacteristic::PROPERTY_NOTIFY
+    );
+    pCharNotify->addDescriptor(new BLE2902());  // Enables notification
 
-    // Start the BLE service
+    // ✅ Characteristic for simple reading
+    pCharRead = pService->createCharacteristic(
+        CHAR_READ_UUID,
+        BLECharacteristic::PROPERTY_READ
+    );
+    pCharRead->setValue("Initial value");
+
+    // Start the service
     pService->start();
 
     // Start BLE advertising
     BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(SERVICE_UUID);
-    pAdvertising->setScanResponse(false);
-    pAdvertising->setMinPreferred(0x0);
     BLEDevice::startAdvertising();
 
-    Serial.println("BLE server is ready and waiting for connections...");
+    Serial.println("BLE server ready and waiting for connections...");
 }
 
 void loop() {
-    // Check if data needs to be sent
+    // Send notification if the application has requested data
     if (deviceConnected && readyToSend) {
-        pCharacteristic->setValue((uint8_t*)&value, 4);
-        pCharacteristic->notify();
+        //delay(100);
+        pCharNotify->setValue((uint8_t*)&value, 4);
+        pCharNotify->notify();
         Serial.println("Notification sent: " + String(value));
+        int temperature = random(20, 30);
+        String tempStr = "Temperature: " + String(temperature);
+        pCharRead->setValue(tempStr.c_str());  
+        pCharRead->notify();
+        Serial.println("Temperature sent: " + tempStr);
 
-        value++;  // Increment the value for the next time
-        readyToSend = false;  // Switch back to waiting mode
+        value++;  
+        readyToSend = false;  
     }
 
-    // Handle disconnection
+    // Handle reconnection/disconnection
     if (!deviceConnected && oldDeviceConnected) {
         delay(500);
         pServer->startAdvertising();
-        Serial.println("Restarting BLE advertising...");
+        Serial.println("Restarting advertising...");
         oldDeviceConnected = deviceConnected;
     }
 
-    // Handle reconnection
     if (deviceConnected && !oldDeviceConnected) {
         Serial.println("New connection established.");
         oldDeviceConnected = deviceConnected;
     }
 
-    delay(100);  // Small pause to avoid excessive CPU usage
+    delay(100);
 }
