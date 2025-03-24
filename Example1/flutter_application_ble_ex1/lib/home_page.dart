@@ -35,6 +35,7 @@ class MyHomePageState extends State<MyHomePage> {
             print("Command '0' sent to ESP32");
           }
 
+          characteristic.setNotifyValue(true);
           // Read the response
           if (characteristic.properties.notify) {
             characteristic.setNotifyValue(true);
