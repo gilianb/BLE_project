@@ -6,59 +6,48 @@
 BLEServer* pServer = NULL;
 BLECharacteristic* pCharacteristic = NULL;
 bool deviceConnected = false;
-bool oldDeviceConnected = false;
-bool readyToSend = false;  // Variable to determine if the ESP32 should send data
-uint32_t value = 1;
+bool readyToSend = false;  
 
-// UUIDs for the service and characteristic
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
-// Connection management
+const char* largeData = "Ceci est un message très long que nous devons découper en plusieurs paquets pour l'envoyer via BLE."; 
+int packetSize = 10;
+int totalPackets;
+int currentPacket = 0;
+
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
         deviceConnected = true;
-        Serial.println("A device has connected.");
+        Serial.println("Appareil connecté.");
     };
 
     void onDisconnect(BLEServer* pServer) {
         deviceConnected = false;
-        Serial.println("A device has disconnected.");
+        Serial.println("Appareil déconnecté.");
     }
 };
 
-// Handling data sent by the application
 class MyCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pCharacteristic) {
         std::string value_from_app = pCharacteristic->getValue();
         
-        if (value_from_app.length() > 0) {
-            String receivedData = String(value_from_app.c_str());
-            Serial.println("Data received from the application: " + receivedData);
-            
-            // If the application sends "0", enable data transmission
-            if (receivedData == "0") {
-                readyToSend = true;
-            }
+        if (value_from_app == "0") { // Déclencher l'envoi
+            readyToSend = true;
+            currentPacket = 0;
+            totalPackets = (strlen(largeData) + packetSize - 1) / packetSize;
+            Serial.println("Début de l'envoi de la grande donnée.");
         }
     }
 };
 
 void setup() {
     Serial.begin(115200);
-    Serial.println("Starting BLE server...");
-
-    // Initialize the BLE device
     BLEDevice::init("ESP32");
-
-    // Create the BLE server
     pServer = BLEDevice::createServer();
     pServer->setCallbacks(new MyServerCallbacks());
 
-    // Create the BLE service
     BLEService *pService = pServer->createService(SERVICE_UUID);
-
-    // Create the BLE characteristic with read, write, and notify properties
     pCharacteristic = pService->createCharacteristic(
         CHARACTERISTIC_UUID,
         BLECharacteristic::PROPERTY_READ |
@@ -68,44 +57,29 @@ void setup() {
     );
 
     pCharacteristic->setCallbacks(new MyCallbacks());
-
-    // Start the BLE service
     pService->start();
-
-    // Start BLE advertising
     BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(SERVICE_UUID);
-    pAdvertising->setScanResponse(false);
-    pAdvertising->setMinPreferred(0x0);
     BLEDevice::startAdvertising();
-
-    Serial.println("BLE server is ready and waiting for connections...");
 }
 
 void loop() {
-    // Check if data needs to be sent
-    if (deviceConnected && readyToSend) {
-        pCharacteristic->setValue((uint8_t*)&value, 4);
+    if (deviceConnected && readyToSend && currentPacket < totalPackets) {
+        char buffer[packetSize + 2]; // 2 octets pour le numéro de paquet
+        buffer[0] = currentPacket & 0xFF; // Index du paquet (octet bas)
+        buffer[1] = (currentPacket >> 8) & 0xFF; // Index du paquet (octet haut)
+        strncpy(buffer + 2, largeData + (currentPacket * packetSize), packetSize);
+        buffer[packetSize + 2] = '\0';
+        delay(100); // Délai pour éviter d'inonder le canal BLE
+        pCharacteristic->setValue((uint8_t*)buffer, packetSize + 2);
         pCharacteristic->notify();
-        Serial.println("Notification sent: " + String(value));
+        
+        Serial.print("Envoi du paquet ");
+        Serial.print(currentPacket);
+        Serial.print(" : ");
+        Serial.println(buffer + 2);
 
-        value++;  // Increment the value for the next time
-        readyToSend = false;  // Switch back to waiting mode
+        currentPacket++;
+        delay(100); // Délai pour éviter d'inonder le canal BLE
     }
-
-    // Handle disconnection
-    if (!deviceConnected && oldDeviceConnected) {
-        delay(500);
-        pServer->startAdvertising();
-        Serial.println("Restarting BLE advertising...");
-        oldDeviceConnected = deviceConnected;
-    }
-
-    // Handle reconnection
-    if (deviceConnected && !oldDeviceConnected) {
-        Serial.println("New connection established.");
-        oldDeviceConnected = deviceConnected;
-    }
-
-    delay(100);  // Small pause to avoid excessive CPU usage
 }

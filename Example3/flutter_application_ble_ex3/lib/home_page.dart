@@ -15,12 +15,15 @@ class MyHomePage extends StatefulWidget {
 }
 
 class MyHomePageState extends State<MyHomePage> {
-  int receivedData = 0;
+  Map<int, String> receivedPackets = {};
+  int totalPackets = -1;
   bool isReading = false;
 
   Future<void> sendRequestAndReadResponse(BluetoothDevice device) async {
     setState(() {
       isReading = true;
+      receivedPackets.clear();
+      totalPackets = -1;
     });
 
     List<BluetoothService> services = await device.discoverServices();
@@ -28,22 +31,38 @@ class MyHomePageState extends State<MyHomePage> {
       for (var characteristic in service.characteristics) {
         if (characteristic.characteristicUuid ==
             Guid("beb5483e-36e1-4688-b7f5-ea07361b26a8")) {
-          // Send "0" to request data
+          // Envoyer "0" pour demander l'envoi des données
           if (characteristic.properties.write) {
             await characteristic
-                .write([48], withoutResponse: false); // "0" in ASCII
-            print("Command '0' sent to ESP32");
+                .write([48], withoutResponse: false); // "0" en ASCII
+            print("Commande '0' envoyée à l'ESP32");
           }
 
-          // Read the response
+          // Lire la réponse
           if (characteristic.properties.notify) {
             characteristic.setNotifyValue(true);
             characteristic.onValueReceived.listen((List<int> data) {
-              if (data.isNotEmpty) {
+              if (data.length < 3) return;
+
+              int packetIndex = data[0] | (data[1] << 8);
+              String receivedChunk = String.fromCharCodes(data.sublist(2));
+
+              receivedPackets[packetIndex] = receivedChunk;
+              print("Reçu paquet $packetIndex : $receivedChunk");
+
+              if (totalPackets != -1 &&
+                  receivedPackets.length == totalPackets) {
+                List<MapEntry<int, String>> sortedEntries =
+                    receivedPackets.entries.toList();
+                sortedEntries.sort((a, b) => a.key.compareTo(b.key));
+
+                String completeData =
+                    sortedEntries.map((entry) => entry.value).join('');
+
+                print("Donnée complète reconstruite : $completeData");
                 setState(() {
-                  receivedData = data[0]; // Read and update UI
+                  isReading = false;
                 });
-                print("Response received from ESP32: $receivedData");
               }
             });
           }
@@ -54,7 +73,7 @@ class MyHomePageState extends State<MyHomePage> {
         }
       }
     }
-    print("No compatible characteristic found.");
+    print("Aucune caractéristique compatible trouvée.");
     setState(() {
       isReading = false;
     });
@@ -65,7 +84,7 @@ class MyHomePageState extends State<MyHomePage> {
         Provider.of<BluetoothDeviceProvider>(context, listen: false);
     final device = provider.connectedDevice;
     if (device == null) {
-      Snackbar.show(ABC.a, "No device connected", success: false);
+      Snackbar.show(ABC.a, "Aucun appareil connecté", success: false);
       return;
     }
     await sendRequestAndReadResponse(device);
@@ -87,7 +106,7 @@ class MyHomePageState extends State<MyHomePage> {
       ),
       body: Container(
         width: double.infinity,
-        height: double.infinity, // Ensures the container takes full height
+        height: double.infinity,
         decoration: const BoxDecoration(
           image: DecorationImage(
             image: AssetImage('assets/bluetooth_backgroud.jpg'),
@@ -95,14 +114,13 @@ class MyHomePageState extends State<MyHomePage> {
           ),
         ),
         child: SizedBox.expand(
-          // Expands `Column` to take full height
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Text(
                 connectedDevice != null
-                    ? "Connected to: ${connectedDevice.remoteId}"
-                    : "No device connected",
+                    ? "Connecté à : ${connectedDevice.remoteId}"
+                    : "Aucun appareil connecté",
                 style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
@@ -115,7 +133,7 @@ class MyHomePageState extends State<MyHomePage> {
                     MaterialPageRoute(
                         builder: (context) => const ScanScreen())),
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
-                child: const Text("Connect a device",
+                child: const Text("Connecter un appareil",
                     style: TextStyle(color: Colors.white)),
               ),
               const SizedBox(height: 20),
@@ -127,11 +145,11 @@ class MyHomePageState extends State<MyHomePage> {
                       ElevatedButton.styleFrom(backgroundColor: Colors.green),
                   child: isReading
                       ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text("Read from ESP",
+                      : const Text("Lire depuis ESP",
                           style: TextStyle(color: Colors.white)),
                 ),
                 const SizedBox(height: 20),
-                Text("Received data: $receivedData",
+                Text("Paquets reçus : ${receivedPackets.length}",
                     style: const TextStyle(fontSize: 16, color: Colors.black)),
               ],
             ],
