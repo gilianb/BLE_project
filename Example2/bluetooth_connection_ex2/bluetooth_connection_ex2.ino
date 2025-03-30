@@ -96,7 +96,7 @@ void setup() {
 void loop() {
     // Send notification if the application has requested data
     if (deviceConnected && readyToSend) {
-        //delay(100);
+        delay(100);
         pCharNotify->setValue((uint8_t*)&value, 4);
         pCharNotify->notify();
         Serial.println("Notification sent: " + String(value));

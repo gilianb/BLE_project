@@ -7,14 +7,17 @@ BLEServer* pServer = NULL;
 BLECharacteristic* pCharacteristic = NULL;
 bool deviceConnected = false;
 bool oldDeviceConnected = false;
-bool readyToSend = false;  // Variable to determine if the ESP32 should send data
-uint32_t value = 1;
+bool readyToSend = false;
+bool totalPacketsSent = false;  // New variable to track if totalPackets has been sent
 
-// UUIDs for the service and characteristic
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
-// Connection management
+const char* largeData = "Bluetooth Low Energy (BLE) has strict limitations on the amount of data that can be sent in a single transmission. To send a large piece of data, it must be broken down into smaller packets that fit within BLE's Maximum Transmission Unit (MTU). Each packet is assigned an index to ensure they are received in the correct order. The receiving device then reconstructs the original data by reassembling these packets."; 
+int packetSize = 17;
+int totalPackets;
+int currentPacket = 0;
+
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
         deviceConnected = true;
@@ -23,23 +26,25 @@ class MyServerCallbacks: public BLEServerCallbacks {
 
     void onDisconnect(BLEServer* pServer) {
         deviceConnected = false;
+        totalPacketsSent = false;  // Reset state on disconnect
         Serial.println("A device has disconnected.");
     }
 };
 
-// Handling data sent by the application
 class MyCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pCharacteristic) {
         std::string value_from_app = pCharacteristic->getValue();
         
-        if (value_from_app.length() > 0) {
-            String receivedData = String(value_from_app.c_str());
-            Serial.println("Data received from the application: " + receivedData);
-            
-            // If the application sends "0", enable data transmission
-            if (receivedData == "0") {
-                readyToSend = true;
-            }
+        if (value_from_app == "0") { // Trigger data send
+            readyToSend = true;
+            currentPacket = 0;
+            totalPackets = (strlen(largeData) + packetSize - 1) / packetSize;
+            totalPacketsSent = false;
+            Serial.println("Preparing to send packets...");
+        }
+        else if (value_from_app == "ACK") { // The app has received totalPackets
+            totalPacketsSent = true;
+            Serial.println("The app confirmed the receipt of totalPackets.");
         }
     }
 };
@@ -48,17 +53,11 @@ void setup() {
     Serial.begin(115200);
     Serial.println("Starting BLE server...");
 
-    // Initialize the BLE device
     BLEDevice::init("ESP32");
-
-    // Create the BLE server
     pServer = BLEDevice::createServer();
     pServer->setCallbacks(new MyServerCallbacks());
 
-    // Create the BLE service
     BLEService *pService = pServer->createService(SERVICE_UUID);
-
-    // Create the BLE characteristic with read, write, and notify properties
     pCharacteristic = pService->createCharacteristic(
         CHARACTERISTIC_UUID,
         BLECharacteristic::PROPERTY_READ |
@@ -68,29 +67,44 @@ void setup() {
     );
 
     pCharacteristic->setCallbacks(new MyCallbacks());
-
-    // Start the BLE service
     pService->start();
-
-    // Start BLE advertising
     BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(SERVICE_UUID);
-    pAdvertising->setScanResponse(false);
-    pAdvertising->setMinPreferred(0x0);
     BLEDevice::startAdvertising();
 
     Serial.println("BLE server is ready and waiting for connections...");
 }
 
 void loop() {
-    // Check if data needs to be sent
     if (deviceConnected && readyToSend) {
-        pCharacteristic->setValue((uint8_t*)&value, 4);
-        pCharacteristic->notify();
-        Serial.println("Notification sent: " + String(value));
+        if (!totalPacketsSent) {
+            // Send the total number of packets before the data
+            char totalPacketsBuffer[2];
+            totalPacketsBuffer[0] = totalPackets & 0xFF;
+            totalPacketsBuffer[1] = (totalPackets >> 8) & 0xFF;
+            pCharacteristic->setValue((uint8_t*)totalPacketsBuffer, 2);
+            pCharacteristic->notify();
+            Serial.println("Sending the total number of packets to the app...");
+            delay(200);  // Small pause to avoid overwhelming the connection
+        }
+        else if (currentPacket < totalPackets) {
+            // Send the data packets
+            char buffer[packetSize + 2]; // 2 bytes for the packet number
+            buffer[0] = currentPacket & 0xFF; // Packet index (low byte)
+            buffer[1] = (currentPacket >> 8) & 0xFF; // Packet index (high byte)
+            strncpy(buffer + 2, largeData + (currentPacket * packetSize), packetSize);
+            buffer[packetSize + 2] = '\0';
+            pCharacteristic->setValue((uint8_t*)buffer, packetSize + 2);
+            pCharacteristic->notify();
+            
+            Serial.print("Sending packet ");
+            Serial.print(currentPacket);
+            Serial.print(" : ");
+            Serial.println(buffer + 2);
 
-        value++;  // Increment the value for the next time
-        readyToSend = false;  // Switch back to waiting mode
+            currentPacket++;
+            delay(100);  // Delay to avoid flooding the BLE channel
+        }
     }
 
     // Handle disconnection
@@ -107,5 +121,5 @@ void loop() {
         oldDeviceConnected = deviceConnected;
     }
 
-    delay(100);  // Small pause to avoid excessive CPU usage
+    delay(100);
 }

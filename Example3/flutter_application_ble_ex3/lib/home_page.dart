@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:provider/provider.dart';
@@ -15,12 +17,16 @@ class MyHomePage extends StatefulWidget {
 }
 
 class MyHomePageState extends State<MyHomePage> {
-  int receivedData = 0;
+  Map<int, String> receivedPackets = {};
+  int totalPackets = -1;
   bool isReading = false;
+  String completeData = "";
 
   Future<void> sendRequestAndReadResponse(BluetoothDevice device) async {
     setState(() {
       isReading = true;
+      receivedPackets.clear();
+      totalPackets = -1;
     });
 
     List<BluetoothService> services = await device.discoverServices();
@@ -28,32 +34,78 @@ class MyHomePageState extends State<MyHomePage> {
       for (var characteristic in service.characteristics) {
         if (characteristic.characteristicUuid ==
             Guid("beb5483e-36e1-4688-b7f5-ea07361b26a8")) {
-          // Send "0" to request data
+          // Step 1: Send "0" to request data transmission
           if (characteristic.properties.write) {
             await characteristic
                 .write([48], withoutResponse: false); // "0" in ASCII
-            print("Command '0' sent to ESP32");
+            print("Command '0' sent to the ESP32");
           }
 
-          // Read the response
+          // Step 2: Enable notifications to receive data
           if (characteristic.properties.notify) {
-            characteristic.setNotifyValue(true);
-            characteristic.onValueReceived.listen((List<int> data) {
-              if (data.isNotEmpty) {
-                setState(() {
-                  receivedData = data[0]; // Read and update UI
-                });
-                print("Response received from ESP32: $receivedData");
+            await characteristic.setNotifyValue(true);
+
+            characteristic.onValueReceived.listen((List<int> data) async {
+              if (data.length == 2 && totalPackets == -1) {
+                // Step 3: Receive the total number of packets
+                totalPackets = data[0] | (data[1] << 8);
+                print("Total number of packets received: $totalPackets");
+
+                // Step 4: Send "ACK" to the ESP32
+                await characteristic.write(utf8.encode("ACK"),
+                    withoutResponse: false);
+                print("ACK sent to the ESP32");
+              } else if (data.length >= 3) {
+                // Step 5: Collect the packets and reconstruct the large data
+                int packetIndex = data[0] | (data[1] << 8);
+                String receivedChunk = String.fromCharCodes(data.sublist(2));
+
+                receivedPackets[packetIndex] = receivedChunk;
+                print("Received packet $packetIndex: $receivedChunk");
+
+                // Step 6: Check if all packets have been received
+                if (totalPackets != -1 &&
+                    receivedPackets.length == totalPackets) {
+                  List<MapEntry<int, String>> sortedEntries =
+                      receivedPackets.entries.toList();
+                  sortedEntries.sort((a, b) => a.key.compareTo(b.key));
+
+                  completeData =
+                      sortedEntries.map((entry) => entry.value).join('');
+
+                  print("Complete data reconstructed: $completeData");
+                  setState(() {
+                    isReading = false;
+                  });
+
+                  // Display a message with the complete data
+                  showDialog(
+                    context: context,
+                    builder: (BuildContext context) {
+                      return AlertDialog(
+                        title: const Text("Complete data received"),
+                        content: Text(completeData),
+                        actions: <Widget>[
+                          TextButton(
+                            child: const Text('OK'),
+                            onPressed: () {
+                              Navigator.of(context).pop();
+                            },
+                          ),
+                        ],
+                      );
+                    },
+                  );
+                }
               }
             });
           }
-          setState(() {
-            isReading = false;
-          });
+
           return;
         }
       }
     }
+
     print("No compatible characteristic found.");
     setState(() {
       isReading = false;
@@ -87,7 +139,7 @@ class MyHomePageState extends State<MyHomePage> {
       ),
       body: Container(
         width: double.infinity,
-        height: double.infinity, // Ensures the container takes full height
+        height: double.infinity,
         decoration: const BoxDecoration(
           image: DecorationImage(
             image: AssetImage('assets/bluetooth_backgroud.jpg'),
@@ -95,18 +147,24 @@ class MyHomePageState extends State<MyHomePage> {
           ),
         ),
         child: SizedBox.expand(
-          // Expands `Column` to take full height
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text(
-                connectedDevice != null
-                    ? "Connected to: ${connectedDevice.remoteId}"
-                    : "No device connected",
-                style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: connectedDevice != null ? Colors.green : Colors.red),
+              StreamBuilder<BluetoothConnectionState>(
+                stream: connectedDevice?.connectionState,
+                builder: (context, snapshot) {
+                  bool isConnected =
+                      snapshot.data == BluetoothConnectionState.connected;
+                  return Text(
+                    isConnected
+                        ? "Connected to: ${connectedDevice?.remoteId}"
+                        : "No device connected",
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: isConnected ? Colors.green : Colors.red),
+                  );
+                },
               ),
               const SizedBox(height: 20),
               ElevatedButton(
@@ -131,7 +189,7 @@ class MyHomePageState extends State<MyHomePage> {
                           style: TextStyle(color: Colors.white)),
                 ),
                 const SizedBox(height: 20),
-                Text("Received data: $receivedData",
+                Text("Packets received: ${receivedPackets.length}",
                     style: const TextStyle(fontSize: 16, color: Colors.black)),
               ],
             ],
